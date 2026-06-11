@@ -15,11 +15,14 @@
     "lint:fix": "oxlint --fix src/",
     "format": "oxfmt --write src/",
     "format:check": "oxfmt --check src/",
+    "translate:dev": "wrangler dev --config live-translate/wrangler.jsonc",
+    "translate:deploy": "wrangler deploy --config live-translate/wrangler.jsonc",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.104.1",
     "@cloudflare/puppeteer": "^1.0.5",
     "hono": "^4.11.6",
     "jose": "^6.0.0",

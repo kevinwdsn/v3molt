@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Live Translate</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header>
+    <h1>🌐 Live Translate</h1>
+    <p class="subtitle">Speak or type — translated in real time</p>
+    <div id="backend-badge" class="badge" hidden></div>
+  </header>
+
+  <main>
+    <section class="controls">
+      <div class="control-group">
+        <label for="source-lang">I'm speaking</label>
+        <select id="source-lang"></select>
+      </div>
+      <button id="swap-btn" type="button" title="Swap source with first target">⇄</button>
+      <div class="control-group">
+        <label>Translate into <span class="hint">(up to 5)</span></label>
+        <div id="target-chips" class="chips"></div>
+      </div>
+    </section>
+
+    <section class="input-area">
+      <button id="mic-btn" type="button" class="mic">
+        <span class="mic-icon">🎙️</span>
+        <span id="mic-label">Start listening</span>
+      </button>
+      <div class="type-row">
+        <input id="text-input" type="text" placeholder="…or type here and press Enter" autocomplete="off" />
+        <button id="send-btn" type="button">Translate</button>
+      </div>
+      <div id="status" class="status" role="status"></div>
+    </section>
+
+    <section id="live-panel" class="live-panel" hidden>
+      <div class="live-original">
+        <span class="panel-label">Hearing…</span>
+        <p id="live-text"></p>
+      </div>
+      <div id="live-translations" class="live-translations"></div>
+    </section>
+
+    <section id="history" class="history" aria-live="polite"></section>
+  </main>
+
+  <footer>
+    <label class="speak-toggle">
+      <input id="auto-speak" type="checkbox" />
+      Speak translations aloud automatically
+    </label>
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+# Copy this to live-translate/.dev.vars for local development
+# (wrangler dev --config live-translate/wrangler.jsonc reads it automatically)
+
+# Preferred backend — Claude translation via the Anthropic API.
+# If unset, the app falls back to the Workers AI binding (@cf/meta/m2m100-1.2b).
+ANTHROPIC_API_KEY=sk-ant-...
+
+# Optional: override the Claude model used for translation.
+# Default is claude-opus-4-8; claude-haiku-4-5 is faster and cheaper.
+# TRANSLATE_MODEL=claude-haiku-4-5
+
+# Optional: route Anthropic requests through a gateway/proxy
+# ANTHROPIC_BASE_URL=https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/anthropic

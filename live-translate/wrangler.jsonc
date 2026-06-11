@@ -1,0 +1,29 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "live-translate",
+  "main": "src/worker.ts",
+  "compatibility_date": "2025-05-06",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+  },
+  // Static UI (no build step — plain HTML/CSS/JS)
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "html_handling": "auto-trailing-slash",
+  },
+  // Workers AI fallback backend (@cf/meta/m2m100-1.2b) — used when
+  // ANTHROPIC_API_KEY is not set
+  "ai": {
+    "binding": "AI",
+  },
+  // Secrets to configure via `wrangler secret put --config live-translate/wrangler.jsonc`:
+  // - ANTHROPIC_API_KEY: preferred backend (Claude translation, all languages,
+  //   multi-target in one request). Optional if relying on Workers AI.
+  //
+  // Optional vars:
+  // - TRANSLATE_MODEL: override the Claude model (default: claude-opus-4-8;
+  //   set claude-haiku-4-5 for lower latency/cost)
+  // - ANTHROPIC_BASE_URL: route through a gateway/proxy
+}
