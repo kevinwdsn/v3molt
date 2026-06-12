@@ -3,7 +3,7 @@
 // Run with: npm run game:smoke
 
 import assert from "node:assert/strict";
-import { createWorld, updateWorld, renderWorld, createInput } from "./src/main.js";
+import { createWorld, updateWorld, renderOverlay, createInput } from "./src/main.js";
 import { NPC_STATE } from "./src/npc.js";
 import { dist } from "./src/util.js";
 
@@ -81,8 +81,8 @@ run(30);
 const heard = world.npcs.filter((n) => n.memories.some((m) => m.heard));
 console.log(`  gossip spread to ${heard.length} NPCs secondhand`);
 
-// 7. Rendering runs without throwing (stub context).
-renderWorld(anything, world, 1280, 720, 12.3);
+// 7. HUD overlay rendering runs without throwing (stub context + projector).
+renderOverlay(anything, world, 1280, 720, () => null);
 
 console.log("smoke test passed ✔");
 console.log(`  heat=${world.wanted.heat.toFixed(2)} cops=${world.cops.length} events=${world.events.events.length}`);

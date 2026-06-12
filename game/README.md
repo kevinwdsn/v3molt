@@ -1,11 +1,14 @@
 # Molt City — open-world prototype with intelligent NPCs
 
-A top-down, GTA-style sandbox that runs entirely in the browser (HTML5 canvas,
-vanilla ES modules, zero runtime dependencies). The point of the prototype is
-the **NPC intelligence**: citizens aren't decorative — they see, remember,
-talk, and the city reacts to what you do.
+A GTA-style sandbox that runs entirely in the browser, rendered in real-time
+3D with Three.js/WebGL: extruded city blocks with window-lit facades, a full
+day/night cycle with dynamic sun shadows, fog, car headlights, and a
+chase camera. The point of the prototype is the **NPC intelligence**:
+citizens aren't decorative — they see, remember, talk, and the city reacts
+to what you do.
 
-![Molt City screenshot — NPCs reacting to a crime](./screenshot.png)
+![Molt City — NPCs reacting to a crime](./screenshot.png)
+![Molt City at night — lit windows and headlights](./screenshot-night.png)
 
 ## Run it
 
@@ -100,5 +103,6 @@ offline.
 | `src/npc.js` | the NPC brain: schedule, perception, memory, gossip, utility AI |
 | `src/police.js` | wanted heat, cop pursuit/search behavior, arrests |
 | `src/dialogue.js` | memory-grounded conversation + LLM-ready context export |
-| `src/main.js` | world setup, input, simulation step, rendering, HUD |
+| `src/render3d.js` | Three.js scene: city geometry, lighting, day/night, chase camera |
+| `src/main.js` | world setup, input, simulation step, HUD overlay |
 | `smoke.mjs` | headless end-to-end test of the whole AI pipeline |

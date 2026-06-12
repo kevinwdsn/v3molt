@@ -6,11 +6,13 @@
     <title>Molt City — open world, smart citizens</title>
     <style>
       html, body { margin: 0; padding: 0; overflow: hidden; background: #111; }
-      canvas { display: block; }
+      canvas { display: block; position: absolute; inset: 0; }
+      #hud { pointer-events: none; }
     </style>
   </head>
   <body>
-    <canvas id="game"></canvas>
+    <canvas id="scene"></canvas>
+    <canvas id="hud"></canvas>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

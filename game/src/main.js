@@ -1,6 +1,6 @@
 // Game bootstrap: world state, input, simulation loop, and all rendering.
 
-import { City, TILE, ROAD, SIDEWALK, PARK } from "./world.js";
+import { City, TILE, ROAD, SIDEWALK } from "./world.js";
 import { Player, Vehicle, CAR_COLORS } from "./entities.js";
 import { NPC, NPC_STATE } from "./npc.js";
 import { WantedSystem, Cop } from "./police.js";
@@ -325,133 +325,21 @@ const KEYMAP = {
   KeyD: "right", ArrowRight: "right",
 };
 
-// --- Rendering ----------------------------------------------------------------
+// --- HUD overlay (2D canvas on top of the 3D scene) ----------------------------
 
-function drawCity(ctx, world, cam, vw, vh) {
-  const { city } = world;
-  const x0 = clamp(Math.floor(cam.x / TILE) - 1, 0, city.w - 1);
-  const y0 = clamp(Math.floor(cam.y / TILE) - 1, 0, city.h - 1);
-  const x1 = clamp(Math.ceil((cam.x + vw) / TILE) + 1, 0, city.w - 1);
-  const y1 = clamp(Math.ceil((cam.y + vh) / TILE) + 1, 0, city.h - 1);
-
-  for (let ty = y0; ty <= y1; ty++) {
-    for (let tx = x0; tx <= x1; tx++) {
-      const t = city.tileAt(tx, ty);
-      const px = tx * TILE - cam.x;
-      const py = ty * TILE - cam.y;
-      if (t === ROAD) {
-        ctx.fillStyle = "#33363c";
-        ctx.fillRect(px, py, TILE, TILE);
-        // Dashed center line between the two opposing lanes.
-        ctx.fillStyle = "#c9b24a";
-        if (tx % 10 === 1 && ty % 10 >= 2 && ty % 4 < 2) ctx.fillRect(px - 1, py + 4, 2, TILE - 8);
-        if (ty % 10 === 1 && tx % 10 >= 2 && tx % 4 < 2) ctx.fillRect(px + 4, py - 1, TILE - 8, 2);
-      } else if (t === SIDEWALK) {
-        ctx.fillStyle = "#8e8e96";
-        ctx.fillRect(px, py, TILE, TILE);
-        ctx.strokeStyle = "#7c7c84";
-        ctx.strokeRect(px + 0.5, py + 0.5, TILE - 1, TILE - 1);
-      } else if (t === PARK) {
-        ctx.fillStyle = "#4a7a44";
-        ctx.fillRect(px, py, TILE, TILE);
-      } else {
-        ctx.fillStyle = "#23252a";
-        ctx.fillRect(px, py, TILE, TILE);
-      }
-    }
-  }
-
-  for (const b of city.buildings) {
-    const px = b.tx * TILE - cam.x;
-    const py = b.ty * TILE - cam.y;
-    const w = b.tw * TILE;
-    const h = b.th * TILE;
-    if (px > vw || py > vh || px + w < 0 || py + h < 0) continue;
-    ctx.fillStyle = b.color;
-    ctx.fillRect(px + 3, py + 3, w - 6, h - 6);
-    ctx.strokeStyle = "rgba(0,0,0,0.45)";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(px + 3, py + 3, w - 6, h - 6);
-    ctx.fillStyle = "rgba(255,255,230,0.18)";
-    for (let wy = 0; wy < b.th; wy++) {
-      for (let wx = 0; wx < b.tw; wx++) {
-        ctx.fillRect(px + 10 + wx * TILE, py + 10 + wy * TILE, 10, 10);
-      }
-    }
-    ctx.fillStyle = "rgba(255,255,255,0.75)";
-    ctx.font = "11px monospace";
+function drawBubbles(ctx, world, project) {
+  ctx.font = "12px sans-serif";
+  for (const npc of world.npcs) {
+    if (npc.indoor || !npc.bubble) continue;
+    const pt = project(npc.x, 26, npc.y);
+    if (!pt) continue;
+    const w = ctx.measureText(npc.bubble).width + 12;
+    ctx.fillStyle = "rgba(255,255,255,0.92)";
+    ctx.fillRect(pt.x - w / 2, pt.y - 16, w, 19);
+    ctx.fillStyle = "#111";
     ctx.textAlign = "center";
-    ctx.fillText(b.name, px + w / 2, py + h / 2);
+    ctx.fillText(npc.bubble, pt.x, pt.y - 2);
   }
-
-  ctx.textAlign = "left";
-  for (const tr of city.trees) {
-    const px = tr.x - cam.x;
-    const py = tr.y - cam.y;
-    if (px < -20 || py < -20 || px > vw + 20 || py > vh + 20) continue;
-    ctx.fillStyle = "#2f5a2c";
-    ctx.beginPath();
-    ctx.arc(px, py, tr.r, 0, Math.PI * 2);
-    ctx.fill();
-  }
-}
-
-function drawVehicle(ctx, v, cam, flash) {
-  ctx.save();
-  ctx.translate(v.x - cam.x, v.y - cam.y);
-  ctx.rotate(v.angle);
-  ctx.fillStyle = "rgba(0,0,0,0.3)";
-  ctx.fillRect(-v.length / 2 + 3, -v.width / 2 + 3, v.length, v.width);
-  ctx.fillStyle = v.color;
-  ctx.fillRect(-v.length / 2, -v.width / 2, v.length, v.width);
-  ctx.fillStyle = "rgba(20,30,40,0.85)";
-  ctx.fillRect(-4, -v.width / 2 + 3, 12, v.width - 6); // windshield
-  if (v.police) {
-    ctx.fillStyle = "#223";
-    ctx.fillRect(-v.length / 2, -v.width / 2, 12, v.width);
-    ctx.fillStyle = flash ? "#f33" : "#33f";
-    ctx.fillRect(-2, -v.width / 2 - 2, 6, 4);
-  }
-  ctx.restore();
-}
-
-function drawPerson(ctx, e, cam, color, downed) {
-  const px = e.x - cam.x;
-  const py = e.y - cam.y;
-  ctx.save();
-  if (downed) {
-    ctx.translate(px, py);
-    ctx.rotate(Math.PI / 2);
-    ctx.translate(-px, -py);
-    ctx.globalAlpha = 0.8;
-  }
-  ctx.fillStyle = "rgba(0,0,0,0.3)";
-  ctx.beginPath();
-  ctx.arc(px + 2, py + 2, e.radius, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = color;
-  ctx.beginPath();
-  ctx.arc(px, py, e.radius, 0, Math.PI * 2);
-  ctx.fill();
-  // Face direction nub.
-  ctx.fillStyle = "#e8c9a0";
-  ctx.beginPath();
-  ctx.arc(px + Math.cos(e.angle) * 5, py + Math.sin(e.angle) * 5, 4, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-}
-
-function drawBubble(ctx, npc, cam) {
-  if (!npc.bubble) return;
-  ctx.font = "11px sans-serif";
-  const w = ctx.measureText(npc.bubble).width + 10;
-  const px = npc.x - cam.x;
-  const py = npc.y - cam.y - 22;
-  ctx.fillStyle = "rgba(255,255,255,0.92)";
-  ctx.fillRect(px - w / 2, py - 14, w, 18);
-  ctx.fillStyle = "#111";
-  ctx.textAlign = "center";
-  ctx.fillText(npc.bubble, px, py - 1);
   ctx.textAlign = "left";
 }
 
@@ -506,11 +394,11 @@ function drawMinimap(ctx, world, vw, vh) {
   ctx.fillStyle = "rgba(10,12,16,0.8)";
   ctx.fillRect(mx - 2, my - 2, size + 4, size + 4);
   // Roads
-  ctx.fillStyle = "#555a64";
-  for (let ty = 0; ty < world.city.h; ty += 2) {
-    for (let tx = 0; tx < world.city.w; tx += 2) {
+  ctx.fillStyle = "#6a7080";
+  for (let ty = 0; ty < world.city.h; ty++) {
+    for (let tx = 0; tx < world.city.w; tx++) {
       if (world.city.tileAt(tx, ty) === ROAD) {
-        ctx.fillRect(mx + tx * TILE * sx, my + ty * TILE * sy, 3, 3);
+        ctx.fillRect(mx + tx * TILE * sx, my + ty * TILE * sy, 2.4, 2.4);
       }
     }
   }
@@ -547,38 +435,9 @@ function drawDialogue(ctx, world, vw, vh) {
   }
 }
 
-export function renderWorld(ctx, world, vw, vh, t) {
-  const pl = world.player;
-  const cam = {
-    x: clamp(pl.x - vw / 2, 0, world.city.w * TILE - vw),
-    y: clamp(pl.y - vh / 2, 0, world.city.h * TILE - vh),
-  };
-
-  ctx.fillStyle = "#1a1c20";
-  ctx.fillRect(0, 0, vw, vh);
-  drawCity(ctx, world, cam, vw, vh);
-
-  for (const v of world.vehicles) drawVehicle(ctx, v, cam, Math.floor(t * 6) % 2 === 0);
-
-  for (const npc of world.npcs) {
-    if (npc.indoor) continue;
-    if (npc.x - cam.x < -30 || npc.y - cam.y < -30 || npc.x - cam.x > vw + 30 || npc.y - cam.y > vh + 30) continue;
-    drawPerson(ctx, npc, cam, npc.shirt, npc.state === NPC_STATE.DOWNED);
-  }
-  for (const cop of world.cops) drawPerson(ctx, cop, cam, "#2a4fd0", false);
-  if (!pl.vehicle) drawPerson(ctx, pl, cam, "#f0f0f0", false);
-
-  for (const npc of world.npcs) {
-    if (!npc.indoor) drawBubble(ctx, npc, cam);
-  }
-
-  // Day/night tint from the game clock.
-  const hr = world.time.hour + world.time.minute / 60;
-  const darkness = hr < 5 || hr > 21 ? 0.45 : hr < 7 ? (7 - hr) * 0.22 : hr > 19 ? (hr - 19) * 0.22 : 0;
-  if (darkness > 0) {
-    ctx.fillStyle = `rgba(10, 14, 40, ${darkness})`;
-    ctx.fillRect(0, 0, vw, vh);
-  }
+export function renderOverlay(ctx, world, vw, vh, project) {
+  ctx.clearRect(0, 0, vw, vh);
+  drawBubbles(ctx, world, project);
 
   if (world.hitFlash > 0) {
     ctx.fillStyle = `rgba(255,0,0,${world.hitFlash})`;
@@ -602,15 +461,19 @@ export function renderWorld(ctx, world, vw, vh, t) {
 
 // --- Boot ----------------------------------------------------------------------
 
-export function boot(doc, win) {
-  const canvas = doc.getElementById("game");
-  const ctx = canvas.getContext("2d");
+export async function boot(doc, win) {
+  const sceneCanvas = doc.getElementById("scene");
+  const hud = doc.getElementById("hud");
+  const ctx = hud.getContext("2d");
   const world = createWorld();
   const input = createInput();
+  const { Renderer3D } = await import("./render3d.js");
+  const renderer = new Renderer3D(sceneCanvas, world);
 
   const resize = () => {
-    canvas.width = win.innerWidth;
-    canvas.height = win.innerHeight;
+    hud.width = win.innerWidth;
+    hud.height = win.innerHeight;
+    renderer.resize(win.innerWidth, win.innerHeight);
   };
   resize();
   win.addEventListener("resize", resize);
@@ -646,13 +509,16 @@ export function boot(doc, win) {
     const dt = Math.min(0.05, (ts - last) / 1000 || 0.016);
     last = ts;
     updateWorld(world, dt, input);
-    renderWorld(ctx, world, canvas.width, canvas.height, ts / 1000);
+    renderer.render(dt, ts / 1000);
+    renderOverlay(ctx, world, hud.width, hud.height, (x, h, z) =>
+      renderer.project(x, h, z, hud.width, hud.height));
     win.requestAnimationFrame(frame);
   };
   win.requestAnimationFrame(frame);
+  win.__world = world; // debug/testing handle
   return world;
 }
 
-if (typeof document !== "undefined" && typeof document.getElementById === "function" && document.getElementById("game")) {
+if (typeof document !== "undefined" && typeof document.getElementById === "function" && document.getElementById("hud")) {
   boot(document, window);
 }
