@@ -18,6 +18,9 @@ import { SSAOPass } from "three/addons/postprocessing/SSAOPass.js";
 import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { Reflector } from "three/addons/objects/Reflector.js";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { clone as cloneSkinned } from "three/addons/utils/SkeletonUtils.js";
+import robotUrl from "../assets/models/RobotExpressive.glb?url";
 
 import { TILE, ROAD, SIDEWALK, PARK } from "./world.js";
 import { NPC_STATE } from "./npc.js";
@@ -100,6 +103,32 @@ export class Renderer3D {
     this.peopleParts = makePeopleParts();
 
     this.buildLightPools();
+    this.loadCharacter();
+  }
+
+  // Load the CC0 rigged character (Quaternius / Don McCurdy). Until it's ready,
+  // pedestrians fall back to the lightweight procedural body.
+  loadCharacter() {
+    this.charReady = false;
+    new GLTFLoader().load(robotUrl, (gltf) => {
+      const model = gltf.scene;
+      const box = new THREE.Box3().setFromObject(model);
+      const size = new THREE.Vector3();
+      box.getSize(size);
+      this.charScale = 24 / size.y; // normalize to ~24 world units tall
+      this.charBaseY = -box.min.y * this.charScale;
+      model.traverse((o) => {
+        if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false; }
+      });
+      this.charModel = model;
+      this.charAnims = gltf.animations;
+      this.charReady = true;
+      // Rebuild any pedestrians spawned before the model arrived.
+      for (const [, g] of this.personMeshes) this.scene.remove(g);
+      this.personMeshes.clear();
+    }, undefined, (err) => {
+      console.warn("character model failed to load, using procedural bodies", err);
+    });
   }
 
   // --- environment / image-based lighting ------------------------------------
@@ -646,7 +675,41 @@ export class Renderer3D {
   personMesh(p, color) {
     let g = this.personMeshes.get(p);
     if (g) return g;
-    g = new THREE.Group();
+    g = this.charReady ? this.buildRobot(color) : this.buildCapsule(color);
+    this.scene.add(g);
+    this.personMeshes.set(p, g);
+    return g;
+  }
+
+  // CC0 rigged character (Quaternius / Don McCurdy), cloned per pedestrian with
+  // its own skeleton, a tinted body, and an animation mixer.
+  buildRobot(color) {
+    const g = new THREE.Group();
+    const model = cloneSkinned(this.charModel);
+    model.scale.setScalar(this.charScale);
+    model.position.y = this.charBaseY;
+    model.rotation.y = Math.PI / 2; // model faces +Z; align forward to +X
+    model.traverse((o) => {
+      if (o.isMesh && o.material && o.material.name === "Main") {
+        o.material = o.material.clone();
+        o.material.color = new THREE.Color(color);
+      }
+    });
+    g.add(model);
+    const mixer = new THREE.AnimationMixer(model);
+    const actions = {};
+    for (const name of ["Idle", "Walking", "Running", "Death"]) {
+      const clip = this.charAnims.find((c) => c.name === name);
+      if (clip) actions[name] = mixer.clipAction(clip);
+    }
+    if (actions.Death) { actions.Death.setLoop(THREE.LoopOnce); actions.Death.clampWhenFinished = true; }
+    actions.Idle?.play();
+    g.userData = { robot: true, mixer, actions, current: "Idle", lastX: 0, lastZ: 0 };
+    return g;
+  }
+
+  buildCapsule(color) {
+    const g = new THREE.Group();
     const shirtMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(color), roughness: 0.85 });
     const torso = new THREE.Mesh(this.peopleParts.body, shirtMat);
     torso.position.y = 9;
@@ -654,7 +717,6 @@ export class Renderer3D {
     const head = new THREE.Mesh(this.peopleParts.head, this.peopleParts.skin);
     head.position.y = 18;
     head.castShadow = true;
-    // Legs and arms pivot from the hip/shoulder (geometry offset downward).
     const legL = new THREE.Mesh(this.peopleParts.limb, this.peopleParts.pants);
     const legR = new THREE.Mesh(this.peopleParts.limb, this.peopleParts.pants);
     legL.position.set(0, 7, 1.6);
@@ -665,13 +727,16 @@ export class Renderer3D {
     armR.position.set(0, 14, -4);
     legL.castShadow = legR.castShadow = armL.castShadow = armR.castShadow = true;
     g.add(torso, head, legL, legR, armL, armR);
-    g.userData.legL = legL;
-    g.userData.legR = legR;
-    g.userData.armL = armL;
-    g.userData.armR = armR;
-    this.scene.add(g);
-    this.personMeshes.set(p, g);
+    g.userData = { robot: false, legL, legR, armL, armR };
     return g;
+  }
+
+  crossfade(g, target) {
+    const ud = g.userData;
+    if (ud.current === target || !ud.actions[target]) return;
+    ud.actions[target].reset().fadeIn(0.25).play();
+    if (ud.actions[ud.current]) ud.actions[ud.current].fadeOut(0.25);
+    ud.current = target;
   }
 
   // --- frame ------------------------------------------------------------------
@@ -689,12 +754,12 @@ export class Renderer3D {
         g.userData.tailM.emissiveIntensity = braking ? 2.5 : 0.5;
       }
     }
-    this.animatePerson(this.personMesh(pl, "#eef0f4"), pl, t, !pl.vehicle, false);
+    this.animatePerson(this.personMesh(pl, "#eef0f4"), pl, dt, t, !pl.vehicle, false);
     for (const npc of world.npcs) {
       const g = this.personMesh(npc, npc.shirt);
-      this.animatePerson(g, npc, t, !npc.indoor, npc.state === NPC_STATE.DOWNED);
+      this.animatePerson(g, npc, dt, t, !npc.indoor, npc.state === NPC_STATE.DOWNED);
     }
-    for (const cop of world.cops) this.animatePerson(this.personMesh(cop, "#243f7c"), cop, t, true, false);
+    for (const cop of world.cops) this.animatePerson(this.personMesh(cop, "#243f7c"), cop, dt, t, true, false);
     for (const [p, g] of this.personMeshes) {
       if (p.arrestTimer !== undefined && !world.cops.includes(p)) {
         this.scene.remove(g);
@@ -803,9 +868,26 @@ export class Renderer3D {
     else this.renderer.render(this.scene, this.camera);
   }
 
-  animatePerson(g, e, t, visible, downed) {
+  animatePerson(g, e, dt, t, visible, downed) {
     g.visible = visible;
     if (!visible) return;
+    const ud = g.userData;
+
+    if (ud.robot) {
+      // Speed from frame-to-frame movement chooses walk vs. run.
+      const sp = dt > 0 ? Math.hypot(e.x - ud.lastX, e.y - ud.lastZ) / dt : 0;
+      ud.lastX = e.x;
+      ud.lastZ = e.y;
+      g.position.set(e.x, 0, e.y);
+      g.rotation.y = -e.angle;
+      g.rotation.z = 0;
+      const urgent = e.state === NPC_STATE.FLEE || e.state === NPC_STATE.CONFRONT || e.arrestTimer !== undefined;
+      this.crossfade(g, downed ? "Death" : sp > (urgent ? 60 : 130) ? "Running" : sp > 6 ? "Walking" : "Idle");
+      ud.mixer.update(dt);
+      return;
+    }
+
+    // Procedural-capsule fallback.
     g.position.set(e.x, 0, e.y);
     g.rotation.y = -e.angle;
     if (downed) {
@@ -816,10 +898,10 @@ export class Renderer3D {
     g.rotation.z = 0;
     const moving = e.path ? e.pathIdx < (e.path.length || 0) : true;
     const swing = moving ? Math.sin(t * 9 + e.id * 1.3) * 0.5 : 0;
-    g.userData.legL.rotation.z = swing;
-    g.userData.legR.rotation.z = -swing;
-    g.userData.armL.rotation.z = -swing * 0.8; // arms counter the legs
-    g.userData.armR.rotation.z = swing * 0.8;
+    ud.legL.rotation.z = swing;
+    ud.legR.rotation.z = -swing;
+    ud.armL.rotation.z = -swing * 0.8; // arms counter the legs
+    ud.armR.rotation.z = swing * 0.8;
     g.position.y = Math.abs(Math.sin(t * 9 + e.id)) * (moving ? 1 : 0.2);
   }
 

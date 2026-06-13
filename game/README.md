@@ -10,6 +10,12 @@ SSAO (ambient occlusion) → HDR UnrealBloom → cinematic grade (vignette,
 film grain, edge chromatic aberration, contrast/saturation) → ACES filmic
 tone-mapping. On top of that:
 
+- **CC0 rigged characters**: pedestrians, cops, and the player use a
+  skeletally-animated glTF model (Quaternius / Don McCurdy, CC0), cloned
+  per-person with its own skeleton and tinted body. Animation crossfades
+  between Idle / Walking / Running / Death are driven by each NPC's speed
+  and AI state. Falls back to a procedural body if the model fails to load.
+  See `assets/CREDITS.md`.
 - PBR car paint with clearcoat and environment-map reflections
 - a real day/night cycle: a moving sun with dynamic shadows, a gradient sky
   dome with a sun disc, drifting procedural clouds, a moon, stars that fade
