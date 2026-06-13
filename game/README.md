@@ -6,21 +6,28 @@ of the prototype is the **NPC intelligence**: citizens aren't decorative —
 they see, remember, talk, and the city reacts to what you do.
 
 **Graphics pipeline** (`src/render3d.js`): physically-based rendering →
-SSAO (ambient occlusion) → HDR UnrealBloom → ACES filmic tone-mapping. On
-top of that:
+SSAO (ambient occlusion) → HDR UnrealBloom → cinematic grade (vignette,
+film grain, edge chromatic aberration, contrast/saturation) → ACES filmic
+tone-mapping. On top of that:
 
 - PBR car paint with clearcoat and environment-map reflections
 - a real day/night cycle: a moving sun with dynamic shadows, a gradient sky
-  dome with a sun disc and atmospheric glow, stars that fade in at night,
-  and warm dawn/dusk tinting
+  dome with a sun disc, drifting procedural clouds, a moon, stars that fade
+  in at night, and warm dawn/dusk tinting
+- **true planar reflections** on wet asphalt at night (the streets mirror
+  the lit skyline); roads are dry during the day, which also skips the
+  reflection pass for performance
 - dynamic night lighting: pooled streetlight, headlight, and police-siren
   lights that follow the player, plus emissive neon shop signage and
   window glow
-- wet, reflective asphalt and atmospheric rain after dark
+- street furniture: cycling traffic lights at intersections, crosswalks,
+  fire hydrants, benches, and trash cans
+- articulated pedestrians with a swinging arm/leg walk cycle
+- atmospheric rain after dark
 - a smoothed GTA-style chase camera that leads in the direction of travel
 
-Low-end devices or headless capture can append `?quality=fast` (drops SSAO)
-and `?pixelRatio=1` to the URL.
+Low-end devices or headless capture can append `?quality=fast` (drops SSAO
+and reflections) and `?pixelRatio=1` to the URL.
 
 ![Molt City — NPCs reacting to a crime](./screenshot.png)
 ![Molt City at night — lit windows and headlights](./screenshot-night.png)

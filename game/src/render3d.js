@@ -15,7 +15,9 @@ import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { SSAOPass } from "three/addons/postprocessing/SSAOPass.js";
+import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+import { Reflector } from "three/addons/objects/Reflector.js";
 
 import { TILE, ROAD, SIDEWALK, PARK } from "./world.js";
 import { NPC_STATE } from "./npc.js";
@@ -24,10 +26,49 @@ import { mulberry32 } from "./util.js";
 const STREETLIGHT_POOL = 10;
 const HEADLIGHT_POOL = 4;
 
+// Final grade: vignette, animated film grain, edge chromatic aberration,
+// and a gentle contrast/saturation lift for a filmic look.
+const CinematicShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    time: { value: 0 },
+    vignette: { value: 1.0 },
+    grain: { value: 0.05 },
+    aberration: { value: 0.0011 },
+    saturation: { value: 1.12 },
+    contrast: { value: 1.05 },
+  },
+  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+  fragmentShader: `
+    uniform sampler2D tDiffuse; uniform float time, vignette, grain, aberration, saturation, contrast;
+    varying vec2 vUv;
+    float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7))) * 43758.5453); }
+    void main(){
+      vec2 c = vUv - 0.5;
+      float r2 = dot(c, c);
+      // chromatic aberration grows toward the edges
+      vec2 off = c * aberration * r2 * 40.0;
+      vec3 col;
+      col.r = texture2D(tDiffuse, vUv + off).r;
+      col.g = texture2D(tDiffuse, vUv).g;
+      col.b = texture2D(tDiffuse, vUv - off).b;
+      // contrast + saturation
+      col = (col - 0.5) * contrast + 0.5;
+      float l = dot(col, vec3(0.299, 0.587, 0.114));
+      col = mix(vec3(l), col, saturation);
+      // vignette
+      col *= 1.0 - smoothstep(0.4, 1.4, r2 * vignette * 2.0) * 0.55;
+      // film grain
+      col += (hash(vUv * vec2(1920.0, 1080.0) + time) - 0.5) * grain;
+      gl_FragColor = vec4(col, 1.0);
+    }`,
+};
+
 export class Renderer3D {
   constructor(canvas, world, opts = {}) {
     this.world = world;
-    this.quality = opts.quality || "high"; // "high" | "fast" (drops SSAO)
+    this.quality = opts.quality || "high"; // "high" | "fast" (drops SSAO + reflections)
+    this.reflections = opts.reflections ?? (this.quality === "high");
 
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
     this.renderer.setPixelRatio(Math.min(opts.pixelRatio || (typeof window !== "undefined" ? window.devicePixelRatio : 1), 2));
@@ -50,6 +91,7 @@ export class Renderer3D {
     this.buildBuildings(world.city);
     this.buildTrees(world.city);
     this.buildStreetlights(world.city);
+    this.buildStreetProps(world.city);
     this.buildRain();
 
     this.vehicleMeshes = new Map();
@@ -113,17 +155,41 @@ export class Renderer3D {
         mid: { value: new THREE.Color(0x9ec4ea) },
         bottom: { value: new THREE.Color(0xcdd6dd) },
         sunDir: { value: new THREE.Vector3(0, 1, 0) },
+        moonDir: { value: new THREE.Vector3(0, -1, 0) },
         sunColor: { value: new THREE.Color(0xfff0d0) },
+        time: { value: 0 },
+        cloud: { value: 0.55 },
+        night: { value: 0 },
       },
       vertexShader: `varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
       fragmentShader: `
-        uniform vec3 top, mid, bottom, sunColor; uniform vec3 sunDir; varying vec3 vDir;
+        uniform vec3 top, mid, bottom, sunColor; uniform vec3 sunDir, moonDir;
+        uniform float time, cloud, night; varying vec3 vDir;
+        float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5); }
+        float noise(vec2 p){
+          vec2 i = floor(p), f = fract(p);
+          f = f*f*(3.0-2.0*f);
+          return mix(mix(hash(i), hash(i+vec2(1,0)), f.x), mix(hash(i+vec2(0,1)), hash(i+vec2(1,1)), f.x), f.y);
+        }
+        float fbm(vec2 p){ float v=0.0, a=0.5; for(int i=0;i<5;i++){ v+=a*noise(p); p*=2.0; a*=0.5; } return v; }
         void main(){
           float h = vDir.y;
           vec3 col = h > 0.0 ? mix(mid, top, pow(h, 0.6)) : mix(mid, bottom, clamp(-h*4.0,0.0,1.0));
           float s = max(dot(normalize(vDir), normalize(sunDir)), 0.0);
-          col += sunColor * pow(s, 80.0) * 1.2;        // sun disc
+          col += sunColor * pow(s, 90.0) * 1.4;        // sun disc
           col += sunColor * pow(s, 6.0) * 0.18;        // atmospheric glow
+          // drifting clouds projected onto the upper hemisphere
+          if (h > 0.02) {
+            vec2 uv = vDir.xz / (h + 0.25);
+            float c = fbm(uv * 2.2 + vec2(time * 0.01, time * 0.004));
+            c = smoothstep(0.55, 0.95, c) * cloud * clamp(h * 3.0, 0.0, 1.0);
+            vec3 cloudCol = mix(vec3(1.0), vec3(0.18, 0.2, 0.28), night);
+            col = mix(col, cloudCol, c * (1.0 - night * 0.4));
+          }
+          // moon disc + halo at night
+          float m = max(dot(normalize(vDir), normalize(moonDir)), 0.0);
+          col += vec3(0.85, 0.9, 1.0) * pow(m, 200.0) * night * 2.0;
+          col += vec3(0.4, 0.5, 0.7) * pow(m, 8.0) * night * 0.2;
           gl_FragColor = vec4(col, 1.0);
         }`,
     });
@@ -163,7 +229,15 @@ export class Renderer3D {
     rcv.width = cv.width;
     rcv.height = cv.height;
     const rg = rcv.getContext("2d");
+    // Alpha map: roads are semi-transparent so the reflector layer shows through.
+    const acv = document.createElement("canvas");
+    acv.width = cv.width;
+    acv.height = cv.height;
+    const ag = acv.getContext("2d");
+    ag.fillStyle = "#fff";
+    ag.fillRect(0, 0, acv.width, acv.height);
     const rng = mulberry32(9);
+    const inter = (tx, ty) => tx % 10 < 2 && ty % 10 < 2;
     for (let ty = 0; ty < city.h; ty++) {
       for (let tx = 0; tx < city.w; tx++) {
         const t = city.tileAt(tx, ty);
@@ -175,7 +249,19 @@ export class Renderer3D {
           g.fillStyle = "#d8c45a";
           if (tx % 10 === 1 && ty % 10 >= 2 && ty % 4 < 2) g.fillRect(x - 1, y + 2, 2, S - 4);
           if (ty % 10 === 1 && tx % 10 >= 2 && tx % 4 < 2) g.fillRect(x + 2, y - 1, S - 4, 2);
-          rg.fillStyle = "#444"; // low roughness → reflective when wet
+          // Crosswalk stripes where a road tile meets an intersection.
+          const nearInter = inter(tx + 2, ty) || inter(tx - 2, ty) || inter(tx, ty + 2) || inter(tx, ty - 2);
+          if (nearInter && !inter(tx, ty)) {
+            g.fillStyle = "#cfd2d6";
+            if (inter(tx, ty + 2) || inter(tx, ty - 2)) {
+              for (let s = 0; s < S; s += 5) g.fillRect(x + s, y + 2, 3, S - 4);
+            } else {
+              for (let s = 0; s < S; s += 5) g.fillRect(x + 2, y + s, S - 4, 3);
+            }
+          }
+          rg.fillStyle = "#333"; // low roughness → reflective when wet
+          ag.fillStyle = "#969696"; // ~0.41 reflection, keeps asphalt readable
+          ag.fillRect(x, y, S, S);
         } else if (t === SIDEWALK) {
           g.fillStyle = "#9a9aa2";
           g.fillRect(x, y, S, S);
@@ -200,12 +286,29 @@ export class Renderer3D {
     const rough = new THREE.CanvasTexture(rcv);
     const W = city.w * TILE;
     const H = city.h * TILE;
+
+    // True planar reflections for wet streets (high quality only).
+    if (this.reflections) {
+      this.roadReflector = new Reflector(new THREE.PlaneGeometry(W, H), {
+        textureWidth: 512, textureHeight: 512, color: 0x33373d,
+      });
+      this.roadReflector.rotation.x = -Math.PI / 2;
+      this.roadReflector.position.set(W / 2, 0.05, H / 2);
+      this.roadReflector.visible = false; // only wet at night
+      this.scene.add(this.roadReflector);
+    }
+
+    const alpha = new THREE.CanvasTexture(acv);
+    // Starts dry/opaque; render() switches the roads to reflective at night.
     this.groundMat = new THREE.MeshStandardMaterial({
       map: tex, roughnessMap: rough, roughness: 1, metalness: 0.1, envMapIntensity: 0.4,
+      alphaMap: this.reflections ? alpha : null,
+      transparent: false,
+      depthWrite: true,
     });
     const ground = new THREE.Mesh(new THREE.PlaneGeometry(W, H), this.groundMat);
     ground.rotation.x = -Math.PI / 2;
-    ground.position.set(W / 2, 0, H / 2);
+    ground.position.set(W / 2, this.reflections ? 0.3 : 0, H / 2);
     ground.receiveShadow = true;
     this.scene.add(ground);
   }
@@ -328,6 +431,80 @@ export class Renderer3D {
     this.scene.add(posts, bulbs);
   }
 
+  buildStreetProps(city) {
+    const rng = mulberry32(202);
+    this.trafficLights = [];
+
+    // Reusable geometry/materials.
+    const poleG = new THREE.CylinderGeometry(0.7, 0.9, 26, 6);
+    const poleM = new THREE.MeshStandardMaterial({ color: 0x23252a, roughness: 0.6, metalness: 0.7 });
+    const housG = new THREE.BoxGeometry(3, 9, 3.5);
+    const housM = new THREE.MeshStandardMaterial({ color: 0x141414, roughness: 0.9 });
+    const lensG = new THREE.SphereGeometry(1.1, 8, 6);
+
+    const placeTrafficLight = (px, pz, faceY) => {
+      const grp = new THREE.Group();
+      const pole = new THREE.Mesh(poleG, poleM);
+      pole.position.y = 13;
+      pole.castShadow = true;
+      const housing = new THREE.Mesh(housG, housM);
+      housing.position.set(0, 24, 2);
+      grp.add(pole, housing);
+      const reds = [];
+      const ambers = [];
+      const greens = [];
+      const mk = (color, y) => {
+        const m = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.2 });
+        const lens = new THREE.Mesh(lensG, m);
+        lens.position.set(0, y, 3.8);
+        grp.add(lens);
+        return m;
+      };
+      reds.push(mk(0xff2a2a, 27));
+      ambers.push(mk(0xffb12a, 24));
+      greens.push(mk(0x2aff5a, 21));
+      grp.position.set(px, 0, pz);
+      grp.rotation.y = faceY;
+      this.scene.add(grp);
+      // Axis decides phase so cross-streets show opposite signals.
+      this.trafficLights.push({ red: reds[0], amber: ambers[0], green: greens[0], phase: faceY > 0.1 ? 0 : 0.5 });
+    };
+
+    const placeBox = (geo, mat, px, py, pz, ry = 0) => {
+      const m = new THREE.Mesh(geo, mat);
+      m.position.set(px, py, pz);
+      m.rotation.y = ry;
+      m.castShadow = true;
+      this.scene.add(m);
+    };
+
+    const hydrantG = new THREE.CylinderGeometry(1.3, 1.5, 5, 8);
+    const hydrantM = new THREE.MeshStandardMaterial({ color: 0xcc3322, roughness: 0.6 });
+    const canG = new THREE.CylinderGeometry(2, 1.8, 6, 8);
+    const canM = new THREE.MeshStandardMaterial({ color: 0x2f5d3a, roughness: 0.8, metalness: 0.3 });
+    const benchSeatG = new THREE.BoxGeometry(12, 1.2, 4);
+    const benchM = new THREE.MeshStandardMaterial({ color: 0x6b4a2c, roughness: 1 });
+
+    for (let ty = 2; ty < city.h - 2; ty++) {
+      for (let tx = 2; tx < city.w - 2; tx++) {
+        const t = city.tileAt(tx, ty);
+        const px = (tx + 0.5) * TILE;
+        const pz = (ty + 0.5) * TILE;
+        // Traffic lights on the corner sidewalk of each intersection.
+        if (t === SIDEWALK && tx % 10 === 2 && ty % 10 === 2) {
+          placeTrafficLight(px, pz, (tx / 10 + ty / 10) % 2 < 1 ? 0 : Math.PI / 2);
+          continue;
+        }
+        if (t === SIDEWALK) {
+          if (rng() < 0.03) placeBox(hydrantG, hydrantM, px, 2.5, pz);
+          else if (rng() < 0.03) placeBox(canG, canM, px, 3, pz);
+        } else if (t === PARK && rng() < 0.04) {
+          placeBox(benchSeatG, benchM, px, 4, pz, rng() * Math.PI);
+        }
+      }
+    }
+  }
+
   buildRain() {
     const N = 1800;
     const pos = new Float32Array(N * 3);
@@ -380,6 +557,8 @@ export class Renderer3D {
     }
     this.bloom = new UnrealBloomPass(new THREE.Vector2(w, h), 0.55, 0.5, 0.82);
     this.composer.addPass(this.bloom);
+    this.cinematic = new ShaderPass(CinematicShader);
+    this.composer.addPass(this.cinematic);
     this.composer.addPass(new OutputPass());
   }
 
@@ -468,20 +647,28 @@ export class Renderer3D {
     let g = this.personMeshes.get(p);
     if (g) return g;
     g = new THREE.Group();
-    const torso = new THREE.Mesh(this.peopleParts.body, new THREE.MeshStandardMaterial({ color: new THREE.Color(color), roughness: 0.85 }));
+    const shirtMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(color), roughness: 0.85 });
+    const torso = new THREE.Mesh(this.peopleParts.body, shirtMat);
     torso.position.y = 9;
     torso.castShadow = true;
     const head = new THREE.Mesh(this.peopleParts.head, this.peopleParts.skin);
     head.position.y = 18;
     head.castShadow = true;
-    const legL = new THREE.Mesh(this.peopleParts.leg, this.peopleParts.pants);
-    const legR = new THREE.Mesh(this.peopleParts.leg, this.peopleParts.pants);
-    legL.position.set(0, 3, 1.6);
-    legR.position.set(0, 3, -1.6);
-    legL.castShadow = legR.castShadow = true;
-    g.add(torso, head, legL, legR);
+    // Legs and arms pivot from the hip/shoulder (geometry offset downward).
+    const legL = new THREE.Mesh(this.peopleParts.limb, this.peopleParts.pants);
+    const legR = new THREE.Mesh(this.peopleParts.limb, this.peopleParts.pants);
+    legL.position.set(0, 7, 1.6);
+    legR.position.set(0, 7, -1.6);
+    const armL = new THREE.Mesh(this.peopleParts.arm, shirtMat);
+    const armR = new THREE.Mesh(this.peopleParts.arm, shirtMat);
+    armL.position.set(0, 14, 4);
+    armR.position.set(0, 14, -4);
+    legL.castShadow = legR.castShadow = armL.castShadow = armR.castShadow = true;
+    g.add(torso, head, legL, legR, armL, armR);
     g.userData.legL = legL;
     g.userData.legR = legR;
+    g.userData.armL = armL;
+    g.userData.armR = armR;
     this.scene.add(g);
     this.personMeshes.set(p, g);
     return g;
@@ -523,9 +710,9 @@ export class Renderer3D {
     const dawn = clamp01(1 - Math.abs(hr - 6.5) / 1.5) + clamp01(1 - Math.abs(hr - 18) / 1.5);
 
     this.sun.intensity = day * 2.4;
-    this.hemi.intensity = 0.18 + day * 0.5;
-    this.moon.intensity = night * 0.35;
-    this.renderer.toneMappingExposure = 0.85 + day * 0.35;
+    this.hemi.intensity = 0.24 + day * 0.46;
+    this.moon.intensity = night * 0.5;
+    this.renderer.toneMappingExposure = 1.0 + day * 0.25;
 
     // sky + fog colors
     const skyTop = new THREE.Color(0x05060f).lerp(new THREE.Color(0x2b6fc4), day);
@@ -542,6 +729,18 @@ export class Renderer3D {
     this.starMat.opacity = night;
     this.groundMat.envMapIntensity = 0.4 + night * 1.4; // wet sheen at night
 
+    // Roads turn reflective (wet) only after dark; saves a full reflection
+    // render pass during the day. Toggle on transition to avoid recompiles.
+    if (this.reflections) {
+      const wet = night > 0.15;
+      if (wet !== this._wet) {
+        this._wet = wet;
+        this.groundMat.transparent = wet;
+        this.groundMat.needsUpdate = true;
+        if (this.roadReflector) this.roadReflector.visible = wet;
+      }
+    }
+
     // sun/moon position relative to player
     const az = 2.2;
     const sunY = Math.max(-0.3, elev) * 1100;
@@ -553,7 +752,10 @@ export class Renderer3D {
     this.moon.target.updateMatrixWorld();
     const sd = this.sun.position.clone().sub(this.sun.target.position).normalize();
     this.skyMat.uniforms.sunDir.value.copy(sd);
+    this.skyMat.uniforms.moonDir.value.copy(this.moon.position.clone().sub(this.moon.target.position).normalize());
     this.skyMat.uniforms.sunColor.value.set(dawn > 0.3 ? 0xff8a4a : 0xfff0d0);
+    this.skyMat.uniforms.time.value = t;
+    this.skyMat.uniforms.night.value = night;
 
     // emissive windows / neon / streetlamp bulbs come up at dusk
     const lit = clamp01(night * 1.5);
@@ -571,6 +773,16 @@ export class Renderer3D {
       lb.blue.emissiveIntensity = on ? 0.1 : 3;
     }
 
+    if (this.trafficLights) {
+      const cyc = (t * 0.1) % 1; // ~10s full cycle
+      for (const tl of this.trafficLights) {
+        const p = (cyc + tl.phase) % 1;
+        tl.green.emissiveIntensity = p < 0.42 ? 1.8 : 0.05;
+        tl.amber.emissiveIntensity = p >= 0.42 && p < 0.5 ? 1.8 : 0.05;
+        tl.red.emissiveIntensity = p >= 0.5 ? 1.8 : 0.05;
+      }
+    }
+
     // --- chase camera ---------------------------------------------------------
     const driving = !!pl.vehicle;
     const heading = driving ? pl.vehicle.angle : pl.angle;
@@ -583,6 +795,10 @@ export class Renderer3D {
     this.camera.lookAt(this.lookAt);
 
     this.stars.position.copy(this.camera.position);
+    if (this.cinematic) {
+      this.cinematic.uniforms.time.value = t;
+      this.cinematic.uniforms.grain.value = 0.022 + night * 0.028;
+    }
     if (this.composer) this.composer.render(dt);
     else this.renderer.render(this.scene, this.camera);
   }
@@ -602,6 +818,8 @@ export class Renderer3D {
     const swing = moving ? Math.sin(t * 9 + e.id * 1.3) * 0.5 : 0;
     g.userData.legL.rotation.z = swing;
     g.userData.legR.rotation.z = -swing;
+    g.userData.armL.rotation.z = -swing * 0.8; // arms counter the legs
+    g.userData.armR.rotation.z = swing * 0.8;
     g.position.y = Math.abs(Math.sin(t * 9 + e.id)) * (moving ? 1 : 0.2);
   }
 
@@ -752,9 +970,15 @@ function makeNeonSign(text, color) {
 }
 
 function makePeopleParts() {
+  // Limbs are offset so their origin sits at the pivot (hip/shoulder).
+  const limb = new THREE.CylinderGeometry(1.5, 1.3, 8, 8);
+  limb.translate(0, -4, 0);
+  const arm = new THREE.CylinderGeometry(1.1, 1.0, 8, 8);
+  arm.translate(0, -4, 0);
   return {
     body: new THREE.CapsuleGeometry(3.2, 7, 4, 10),
-    leg: new THREE.CylinderGeometry(1.5, 1.3, 8, 8),
+    limb,
+    arm,
     head: new THREE.SphereGeometry(2.8, 12, 10),
     skin: new THREE.MeshStandardMaterial({ color: 0xe0b48c, roughness: 0.8 }),
     pants: new THREE.MeshStandardMaterial({ color: 0x2c3040, roughness: 1 }),
