@@ -1,11 +1,26 @@
 # Molt City — open-world prototype with intelligent NPCs
 
 A GTA-style sandbox that runs entirely in the browser, rendered in real-time
-3D with Three.js/WebGL: extruded city blocks with window-lit facades, a full
-day/night cycle with dynamic sun shadows, fog, car headlights, and a
-chase camera. The point of the prototype is the **NPC intelligence**:
-citizens aren't decorative — they see, remember, talk, and the city reacts
-to what you do.
+3D with Three.js/WebGL through a cinematic post-processing pipeline. The point
+of the prototype is the **NPC intelligence**: citizens aren't decorative —
+they see, remember, talk, and the city reacts to what you do.
+
+**Graphics pipeline** (`src/render3d.js`): physically-based rendering →
+SSAO (ambient occlusion) → HDR UnrealBloom → ACES filmic tone-mapping. On
+top of that:
+
+- PBR car paint with clearcoat and environment-map reflections
+- a real day/night cycle: a moving sun with dynamic shadows, a gradient sky
+  dome with a sun disc and atmospheric glow, stars that fade in at night,
+  and warm dawn/dusk tinting
+- dynamic night lighting: pooled streetlight, headlight, and police-siren
+  lights that follow the player, plus emissive neon shop signage and
+  window glow
+- wet, reflective asphalt and atmospheric rain after dark
+- a smoothed GTA-style chase camera that leads in the direction of travel
+
+Low-end devices or headless capture can append `?quality=fast` (drops SSAO)
+and `?pixelRatio=1` to the URL.
 
 ![Molt City — NPCs reacting to a crime](./screenshot.png)
 ![Molt City at night — lit windows and headlights](./screenshot-night.png)

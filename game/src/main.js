@@ -468,7 +468,12 @@ export async function boot(doc, win) {
   const world = createWorld();
   const input = createInput();
   const { Renderer3D } = await import("./render3d.js");
-  const renderer = new Renderer3D(sceneCanvas, world);
+  // Optional ?quality=fast and ?pixelRatio=N for low-end devices / headless capture.
+  const params = new URLSearchParams(win.location ? win.location.search : "");
+  const renderer = new Renderer3D(sceneCanvas, world, {
+    quality: params.get("quality") || "high",
+    pixelRatio: params.get("pixelRatio") ? Number(params.get("pixelRatio")) : undefined,
+  });
 
   const resize = () => {
     hud.width = win.innerWidth;
