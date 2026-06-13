@@ -6,6 +6,7 @@ import { NPC, NPC_STATE } from "./npc.js";
 import { WantedSystem, Cop } from "./police.js";
 import { npcGreeting, npcReply, dialogueOptions } from "./dialogue.js";
 import { mulberry32, clamp, dist, EventLog } from "./util.js";
+import { attachTouchControls } from "./touch.js";
 
 const NPC_COUNT = 90;
 const TRAFFIC_COUNT = 26;
@@ -65,7 +66,15 @@ export function createWorld(seed = 20260612) {
     world.hintTimer = dur;
   };
 
-  world.setHint("WASD move · E enter/exit car · T talk · SPACE punch / handbrake", 10);
+  const isTouchDevice =
+    typeof window !== "undefined" &&
+    ("ontouchstart" in window || (window.navigator && window.navigator.maxTouchPoints > 0));
+  world.setHint(
+    isTouchDevice
+      ? "Joystick: move · E: car · T: talk · HIT: punch"
+      : "WASD move · E enter/exit car · T talk · SPACE punch / handbrake",
+    10,
+  );
   return world;
 }
 
@@ -509,6 +518,8 @@ export async function boot(doc, win) {
     if (e.code === "Space") input.brake = false;
   });
 
+  const touchTick = attachTouchControls(doc, win, world, input, chooseDialogueOption);
+
   let last = 0;
   const frame = (ts) => {
     const dt = Math.min(0.05, (ts - last) / 1000 || 0.016);
@@ -517,6 +528,7 @@ export async function boot(doc, win) {
     renderer.render(dt, ts / 1000);
     renderOverlay(ctx, world, hud.width, hud.height, (x, h, z) =>
       renderer.project(x, h, z, hud.width, hud.height));
+    touchTick();
     win.requestAnimationFrame(frame);
   };
   win.requestAnimationFrame(frame);

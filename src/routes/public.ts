@@ -67,4 +67,16 @@ publicRoutes.get('/_admin/assets/*', async (c) => {
   return c.env.ASSETS.fetch(new Request(assetUrl.toString(), c.req.raw));
 });
 
+// GET /game - Redirect to canonical /game/ path
+publicRoutes.get('/game', (c) => {
+  const url = new URL(c.req.url);
+  url.pathname = '/game/';
+  return Response.redirect(url.toString(), 301);
+});
+
+// GET /game/* - Serve the Molt City game static bundle (no auth required)
+publicRoutes.get('/game/*', async (c) => {
+  return c.env.ASSETS.fetch(c.req.raw);
+});
+
 export { publicRoutes };
